@@ -1,6 +1,7 @@
 import sys
 import os
 from datetime import time, datetime, timedelta
+from math import ceil
 
 from PySide2.QtCore import QTimer, Qt, QTime, QUrl
 from PySide2.QtGui import QIcon
@@ -25,14 +26,16 @@ class Chrono(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.isRunning = False
+        self.refresh_rate = 100  # ms
 
         self.progressBar = QProgressBar()
         self.progressBar.setValue(0)
-        self.hours = self.minutes = self.seconds = 0
+        self.begin_time = self.end_time = 0
 
         self.label = QLabel(" ")
         self.button = QPushButton()
         self.button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+        self.end_delay = self.begin_delay = 0
 
         bottomLayout = QHBoxLayout()
         bottomLayout.addWidget(self.progressBar)
@@ -50,7 +53,7 @@ class Chrono(QMainWindow):
         self.setStatusBar(self.statusBar)
 
         self.notification = self.notification_popup = self.notification_tray = self.notification_sound = True
-        self.notification_soundfile = os.path.dirname(sys.argv[0]) + '/notification.mp3' # os.path.dirname(__file__) + 
+        self.notification_soundfile = os.path.dirname(sys.argv[0]) + '/notification.mp3'  # os.path.dirname(__file__) +
 
         self.setWindowTitle(TITLE)
         self.resize(400, self.sizeHint().height())
@@ -82,7 +85,7 @@ class Chrono(QMainWindow):
 
     def createSystemTrayIcon(self):
         self.tray = QSystemTrayIcon()
-        self.tray.setIcon(QIcon(os.path.dirname(sys.argv[0]) + '/icon.svg')) # os.path.dirname(__file__) + 
+        self.tray.setIcon(QIcon(os.path.dirname(sys.argv[0]) + '/icon.svg'))  # os.path.dirname(__file__) +
         self.tray.setToolTip(TITLE)
         self.tray.show()
 
@@ -99,7 +102,7 @@ class Chrono(QMainWindow):
 
     def stayOnTop(self):
         self.setWindowFlags(self.windowFlags() ^ Qt.WindowStaysOnTopHint)
-        #self.windowFlags() | Qt.CustomizeWindowHint | Qt.Window | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)  # Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)
+        # self.windowFlags() | Qt.CustomizeWindowHint | Qt.Window | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)  # Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)
         self.show()
 
     def createNotificationPopup(self):
@@ -131,7 +134,8 @@ class Chrono(QMainWindow):
 
         button = QPushButton("Ok")
         button.clicked.connect(
-            lambda: self.changeNotificationSettings(popup, GroupBox, checkBox_popup, checkBox_notification, checkBox_sound)
+            lambda: self.changeNotificationSettings(popup, GroupBox, checkBox_popup, checkBox_notification,
+                                                    checkBox_sound)
         )
 
         outerLayout = QVBoxLayout()
@@ -209,58 +213,52 @@ class Chrono(QMainWindow):
 
     def createDuration(self, popup: QDialog, hours: int, minutes: int, seconds: int):
         popup.close()
-        self.hours, self.minutes, self.seconds = hours, minutes, seconds
-        self.progressBar.setRange(0, seconds + minutes * 60 + hours * 3600)
+
+        self.begin_time = datetime.timestamp(datetime.now())
+        self.end_time = self.begin_time + seconds + minutes * 60 + hours * 3600
+        self.progressBar.setRange(0, 100)
         self.progressBar.setValue(0)
-        self.label.setText(f'{self.hours:02}:{self.minutes:02}:{self.seconds:02}')
 
         self.isRunning = True
         self.timer.stop()
-        self.timer.start(1000)
+        self.timer.start(self.refresh_rate)
 
     def createDate(self, popup: QDialog, hours: int, minutes: int, seconds: int):
         popup.close()
+
+        self.begin_time = datetime.timestamp(datetime.now())
 
         now = datetime.now().time()
         target = time(hours, minutes, seconds)
         now_delta = timedelta(hours=now.hour, minutes=now.minute, seconds=now.second)
         target_delta = timedelta(hours=target.hour, minutes=target.minute, seconds=target.second)
-        d = target_delta - now_delta
 
-        _ = [d.total_seconds() if d.total_seconds() > 0 else d.total_seconds() + 24 * 60 * 60][0]
+        if target_delta == now_delta:
+            self.end_time = self.begin_time + 60 * 60 * 24
+        else:
+            d = target_delta - now_delta
+            self.end_time = self.begin_time + d.seconds
 
-        self.progressBar.setRange(0, _)
-
-        self.hours = int(_ / 3600)
-        _ -= self.hours * 3600
-        self.minutes = int(_ / 60)
-        _ -= self.minutes * 60
-        self.seconds = int(_)
-
+        self.progressBar.setRange(0, 100)
         self.progressBar.setValue(0)
-        self.label.setText(f'{self.hours:02}:{self.minutes:02}:{self.seconds:02}')
 
         self.isRunning = True
         self.timer.stop()
-        self.timer.start(1000)
+        self.timer.start(self.refresh_rate)
 
     def tick(self):
-        self.progressBar.setValue(self.progressBar.value() + 1)
+        self.progressBar.setValue(
+            100 * (datetime.timestamp(datetime.now()) - self.begin_time) / (self.end_time - self.begin_time))
 
-        if self.seconds:
-            self.seconds -= 1
-        elif self.minutes:
-            self.seconds = 59
-            self.minutes -= 1
-        elif self.hours:
-            self.seconds = self.minutes = 59
-            self.hours -= 1
+        seconds = int(ceil(self.end_time - datetime.timestamp(datetime.now())) % 60)
+        minutes = int(ceil(self.end_time - datetime.timestamp(datetime.now())) / 60 % 60)
+        hours = int(ceil(self.end_time - datetime.timestamp(datetime.now())) / 3600)
 
-        self.label.setText(f'{self.hours:02}:{self.minutes:02}:{self.seconds:02}')
-        self.setWindowTitle(f'{self.hours:02}:{self.minutes:02}:{self.seconds:02} - {TITLE}')
-        self.tray.setToolTip(f'{self.hours:02}:{self.minutes:02}:{self.seconds:02}')
+        self.label.setText(f'{hours:02}:{minutes:02}:{seconds:02}')
+        self.setWindowTitle(f'{TITLE} - {hours:02}:{minutes:02}:{seconds:02}')
+        self.tray.setToolTip(f'{hours:02}:{minutes:02}:{seconds:02}')
 
-        if self.progressBar.value() == self.progressBar.maximum():
+        if datetime.timestamp(datetime.now()) >= self.end_time:
             self.isRunning = False
             self.timer.stop()
             self.progressBar.setRange(0, 0)
@@ -271,7 +269,8 @@ class Chrono(QMainWindow):
         if not self.notification:
             return
         if self.notification_tray:
-            self.tray.showMessage("Finished", "Le décompte est terminé", self.style().standardIcon(QStyle.SP_MessageBoxInformation))
+            self.tray.showMessage("Finished", "Le décompte est terminé",
+                                  self.style().standardIcon(QStyle.SP_MessageBoxInformation))
         if self.notification_sound:
             test = QMediaPlayer()
             test.setMedia(QUrl.fromLocalFile(self.notification_soundfile))
@@ -284,11 +283,20 @@ class Chrono(QMainWindow):
             return
         self.progressBar.setDisabled(self.timer.isActive())
         if self.timer.isActive():
+            self.end_delay = self.end_time - datetime.timestamp(datetime.now())
+            self.begin_delay = datetime.timestamp(datetime.now()) - self.begin_time
+            print(self.begin_time)
+            print(self.end_time)
+            print(self.end_delay)
             self.statusBar.showMessage("Pause")
             self.tray.setToolTip(self.tray.toolTip() + ' - Pause')
             self.timer.stop()
             self.button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         else:
+            self.begin_time = datetime.timestamp(datetime.now()) - self.begin_delay
+            self.end_time = datetime.timestamp(datetime.now()) + self.end_delay
+            print(self.begin_time)
+            print(self.end_time)
             self.statusBar.clearMessage()
             self.timer.start()
             self.button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
